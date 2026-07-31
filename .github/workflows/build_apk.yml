@@ -46,24 +46,37 @@ jobs:
       - name: Install Android NDK
         run: sdkmanager "ndk;25.2.9519653"
 
-      - name: Install and configure gomobile
+      - name: Generate protobuf code
+        run: make protobuf
+
+      # gomobile init 会下载 NDK 到 $GOPATH/pkg/gomobile/
+      # 预先创建该目录并放一个标记文件，让 gomobile 认为 NDK 已存在
+      - name: Pre-populate gomobile NDK cache
+        run: |
+          GOMOBILE_DIR="$(go env GOPATH)/pkg/gomobile"
+          mkdir -p "$GOMOBILE_DIR"
+          NDK_DIR="$GOMOBILE_DIR/android-ndk"
+          mkdir -p "$NDK_DIR"
+          # 将 sdkmanager 安装的 NDK 软链接过去
+          ln -sf "$ANDROID_HOME/ndk/25.2.9519653" "$NDK_DIR/25.2.9519653"
+          # 创建标记文件让 gomobile 跳过下载
+          touch "$NDK_DIR/.gomobile-initialized"
+          echo "Gomobile NDK cache prepared at $GOMOBILE_DIR"
+          ls -la "$NDK_DIR/"
+
+      - name: Install gomobile and init
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/bind@latest
           export PATH="$(go env GOPATH)/bin:$PATH"
-          export ANDROID_HOME=$ANDROID_HOME
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
-          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          gomobile init -v 2>&1 || echo "gomobile init failed, trying bind directly"
+          gomobile init -v 2>&1 || echo "gomobile init warning (may be ok)"
 
       - name: Build server AAR
         run: |
           export PATH="$(go env GOPATH)/bin:$PATH"
-          export ANDROID_HOME=$ANDROID_HOME
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
-          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          make protobuf
-          make server-aar
+          gomobile bind -target=android -androidapi 21 -ldflags "-s -w" -o android/app/libs/server.aar ./server/run
 
       - name: Flutter pub get
         run: flutter pub get
