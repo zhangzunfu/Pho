@@ -10,65 +10,76 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: golang:1.22-bookworm
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          apt-get update && apt-get install -y \
-            protobuf-compiler \
-            openjdk-17-jdk \
-            wget unzip git cmake ninja-build \
-            clang lld curl xz-utils zip
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
-      # 手动安装 Flutter（容器内不能用 subosito/flutter-action）
-      - name: Install Flutter
-        run: |
-          cd /tmp
-          wget -q https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.22.2-stable.tar.xz
-          tar xf flutter_linux_3.22.2-stable.tar.xz -C /opt/
-          echo "/opt/flutter/bin" >> $GITHUB_PATH
-          echo "/opt/flutter/bin/cache/dart-sdk/bin" >> $GITHUB_PATH
-          flutter --version
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
 
-      - name: Install Android SDK and NDK
-        run: |
-          mkdir -p /opt/android-sdk/cmdline-tools
-          cd /tmp
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
-          unzip -q cmdtools.zip
-          mv cmdline-tools /opt/android-sdk/cmdline-tools/latest
-          export ANDROID_HOME=/opt/android-sdk
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          yes | sdkmanager --licenses > /dev/null 2>&1
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
-          echo "ANDROID_HOME=/opt/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=/opt/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.2"
+          channel: stable
 
-      - name: Install Go protoc plugins
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install protoc and plugins
         run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.27.1
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1.0
+          dart pub global activate protoc_plugin 21.1.2
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+
+      - name: Install NDK and gomobile
+        run: |
+          sdkmanager "ndk;25.2.9519653"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/bind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
-      - name: Install Dart protoc plugin
+      # 关键：预创建 gomobile 期望的 NDK 目录结构
+      # gomobile init 下载 NDK 到 $GOPATH/pkg/gomobile/android-ndk/<version>/
+      # 我们把 sdkmanager 的 NDK 软链接过去
+      - name: Trick gomobile into using existing NDK
         run: |
-          dart pub global activate protoc_plugin 21.1.2
-          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+          GOMOBILE_NDK="$HOME/gomobile-ndk"
+          NDK_VER="r25c"
+          mkdir -p "$GOMOBILE_NDK/$NDK_VER"
+          # sdkmanager 的 NDK 路径
+          SDK_NDK="$ANDROID_HOME/ndk/25.2.9519653"
+          # 创建符号链接，让 gomobile 认为 NDK 已下载
+          ln -sf "$SDK_NDK" "$GOMOBILE_NDK/$NDK_VER/ndk"
+          # 也创建 gomobile 期望的路径
+          GOPATH_GOMOBILE="$(go env GOPATH)/pkg/gomobile/android-ndk"
+          mkdir -p "$GOPATH_GOMOBILE/$NDK_VER"
+          ln -sf "$SDK_NDK" "$GOPATH_GOMOBILE/$NDK_VER/ndk"
+          echo "GOMOBILE_NDK=$GOMOBILE_NDK" >> $GITHUB_ENV
+
+      - name: Init gomobile
+        run: |
+          export GOMOBILE_NDK=$GOMOBILE_NDK
+          gomobile init -v 2>&1 || echo "WARNING: gomobile init failed, will try direct bind"
 
       - name: Generate protobuf code
         run: make protobuf
 
-      - name: Build server AAR with gomobile
+      - name: Build server AAR
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/bind@latest
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          gomobile init -v
-          gomobile bind -target=android -androidapi 21 -ldflags "-s -w" -o android/app/libs/server.aar ./server/run
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
+          make server-aar
 
       - name: Flutter pub get
         run: flutter pub get
