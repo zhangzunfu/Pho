@@ -21,14 +21,18 @@ jobs:
             protobuf-compiler \
             openjdk-17-jdk \
             wget unzip git cmake ninja-build \
-            clang lld
+            clang lld curl xz-utils zip
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.22.2"
-          channel: stable
+      # 手动安装 Flutter（容器内不能用 subosito/flutter-action）
+      - name: Install Flutter
+        run: |
+          cd /tmp
+          wget -q https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.22.2-stable.tar.xz
+          tar xf flutter_linux_3.22.2-stable.tar.xz -C /opt/
+          echo "/opt/flutter/bin" >> $GITHUB_PATH
+          echo "/opt/flutter/bin/cache/dart-sdk/bin" >> $GITHUB_PATH
+          flutter --version
 
       - name: Install Android SDK and NDK
         run: |
@@ -44,12 +48,15 @@ jobs:
           echo "ANDROID_HOME=/opt/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=/opt/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
 
-      - name: Install protoc plugins
+      - name: Install Go protoc plugins
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.27.1
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1.0
-          dart pub global activate protoc_plugin 21.1.2
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Install Dart protoc plugin
+        run: |
+          dart pub global activate protoc_plugin 21.1.2
           echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
 
       - name: Generate protobuf code
