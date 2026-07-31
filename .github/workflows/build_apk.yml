@@ -33,31 +33,48 @@ jobs:
           flutter-version: "3.22.2"
           channel: stable
 
-      - name: Setup Android SDK + NDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK and gomobile
+      - name: Install protoc and Go plugins
         run: |
-          sdkmanager "ndk;25.2.9519653"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
-          # 安装 protoc
           sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          # Go protoc 插件
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.27.1
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1.0
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-          # Dart protoc 插件
+
+      - name: Install Dart protoc plugin
+        run: |
           dart pub global activate protoc_plugin 21.1.2
           echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
-          # gomobile
+
+      # ========== 安装 NDK ==========
+
+      - name: Install Android NDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la $ANDROID_HOME/ 2>/dev/null || echo "ANDROID_HOME not found"
+          sdkmanager --list 2>/dev/null | head -5
+          sdkmanager "ndk;25.2.9519653"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
+
+      # ========== 安装 gomobile ==========
+
+      - name: Install gomobile
+        run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/bind@latest
           gomobile init
 
-      # ========== 构建 Go 服务端 AAR（内含 protobuf 代码生成） ==========
+      # ========== 构建 Go 服务端 AAR ==========
 
       - name: Build server AAR
-        run: make server-aar
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls "$ANDROID_NDK_HOME" 2>/dev/null || echo "NDK dir not found"
+          make server-aar
 
       # ========== 构建 Flutter APK ==========
 
